@@ -1,0 +1,109 @@
+nameOverride: argocd
+
+repoServer:
+  podSecurityContext:
+    fsGroup: 999
+  extraContainers:
+    - name: argocd-gomplate
+      command: [/var/run/argocd/argocd-cmp-server]
+      image: ghcr.io/arturo-builds-infra/argocd-gomplate:latest
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+      env:
+        - name: HELM_REGISTRY_CONFIG
+          value: /home/argocd/.docker/argocd-gomplate-config.json
+        - name: HELM_CONFIG_HOME
+          value: /tmp/helm/config
+        - name: HELM_CACHE_HOME
+          value: /tmp/helm/.cache
+      volumeMounts:
+        - mountPath: /var/run/argocd
+          name: var-files
+        - mountPath: /home/argocd/cmp-server/plugins
+          name: plugins
+        - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+          subPath: argocd-gomplate.yaml
+          name: argocd-cmp-cm
+        - mountPath: /tmp
+          name: cmp-tmp
+        - name: docker-config
+          mountPath: /home/argocd/.docker/argocd-gomplate-config.json
+          subPath: .dockerconfigjson
+          readOnly: true
+  volumes:
+    - name: argocd-cmp-cm
+      configMap:
+        name: argocd-cmp-cm
+    - emptyDir: {}
+      name: cmp-tmp
+    - name: docker-config
+      secret:
+        secretName: ghcr-docker-config
+
+configs:
+  params:
+    applicationsetcontroller.enable.progressive.syncs: "true"
+  clusterCredentials:
+    in-cluster:
+      server: https://kubernetes.default.svc
+      config: {}
+      labels:
+        alias: banks-meowster
+        environment: dev
+  
+  cmp:
+    create: true
+    plugins:
+      argocd-gomplate:
+        generate:
+          command: [sh, -c]
+          args:
+            - |
+              if [ -f application.yaml.tpl ]; then
+                ALLOWED_ENVS="${ARGOCD_ENV_ALLOWED_ENVIRONMENTS:-}"
+                CURRENT_ENV="${ARGOCD_ENV_ENVIRONMENT:-}"
+
+                if [ -n "$ALLOWED_ENVS" ]; then
+                  ALLOWED_LIST=$(echo "$ALLOWED_ENVS" | tr ',' ' ')
+                  ALLOWED=false
+                  for env in $ALLOWED_LIST; do
+                    if [ "$CURRENT_ENV" = "$env" ]; then
+                      ALLOWED=true
+                      break
+                    fi
+                  done
+                fi
+
+                gomplate -d env=overrides.yaml -f application.yaml.tpl -o application.yaml
+                cat application.yaml
+                exit 0
+              fi
+
+              if [[ "${ARGOCD_ENV_HELM_CHART_URL}" == oci://* ]]; then
+                CHART_REF="${ARGOCD_ENV_HELM_CHART_URL}/${ARGOCD_ENV_HELM_CHART_NAME}"
+                HELM_REPO_ARG=""
+              else
+                CHART_REF="${ARGOCD_ENV_HELM_CHART_NAME}"
+                HELM_REPO_ARG="--repo ${ARGOCD_ENV_HELM_CHART_URL}"
+              fi
+
+              gomplate -d env=overrides.yaml -f values.yaml.tpl -o values.yaml
+
+              if [ -f pre.yaml.tpl ]; then
+                gomplate -d env=overrides.yaml -f pre.yaml.tpl -o pre.yaml
+                echo "---"
+                cat pre.yaml
+              fi
+
+              helm template ${ARGOCD_APP_NAME} ${CHART_REF} \
+                --version ${ARGOCD_ENV_HELM_CHART_VERSION} \
+                ${HELM_REPO_ARG} \
+                -f values.yaml \
+                --namespace ${ARGOCD_ENV_APPLICATION_NAMESPACE}
+
+              if [ -f post.yaml.tpl ]; then
+                gomplate -d env=overrides.yaml -f post.yaml.tpl -o post.yaml
+                echo "---"
+                cat post.yaml
+              fi
