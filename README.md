@@ -23,6 +23,24 @@ This configuration adds a custom plugin to ArgoCD that processes Helm charts wit
 - ArgoCD installed via Helm
 - Access to pull from `ghcr.io/arturo-builds-infra/argocd-gomplate` (public image, no credentials needed)
 
+### Install required packages
+
+This repo ships package manifests that install the local CLI tools it uses (`helm`, `kubectl`):
+
+- macOS, using [Homebrew](https://brew.sh/) and the `Brewfile`:
+
+  ```shell
+  brew bundle
+  ```
+
+- Arch Linux, using the `pkglist.txt` (all packages are in the official repos):
+
+  ```shell
+  grep -vE '^(#|$)' pkglist.txt | sudo pacman -S --needed -
+  ```
+
+On other operating systems, install the tools listed above manually. Note that `gomplate` is NOT a local dependency here — it runs inside the `argocd-gomplate` sidecar container.
+
 ## Installation
 
 ### Using Helm
